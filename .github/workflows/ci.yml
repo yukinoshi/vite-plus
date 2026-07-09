@@ -1099,6 +1099,10 @@ jobs:
           cargo test -p vite_cli_snapshots
         env:
           RUST_BACKTRACE: '1'
+          # Diagnostic step tracing to stderr (see snap_trace): a step that
+          # logs START without END is the one that wedged. Investigating the
+          # recurring Namespace-Linux PTY wedge that survives the spawn bound.
+          VP_SNAP_TRACE: '1'
 
   # Runs the PTY snapshot suite (crates/vite_cli_snapshots) on Windows with
   # BOTH vp flavors, without a Rust toolchain on the runner: the test binary
