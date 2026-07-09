@@ -1098,34 +1098,31 @@ jobs:
         # blocking that keeps cli-snapshot-test-windows on GitHub-hosted
         # runners). Without this, a wedged case burns the 6h job default and
         # never flushes the step log; the timeout fails fast and preserves it.
-        timeout-minutes: 10
+        # Raised to 20 because the Linux leg now runs fully serial (see below).
+        timeout-minutes: 20
         # `--nocapture` streams snap_trace's stderr lines into this step's live
         # log: a hard wedge cancels the whole job before `Print PTY trace` runs
         # (and discards the file), so the file alone is not enough — the live
         # log keeps the trace up to the wedged step.
         run: |
-          # DIAGNOSTIC RUN (full parallelism, to reproduce the ~1-2 min job
-          # teardown): identify which process sends the SIGINT that cancels the
-          # job. The kernel's signal:signal_generate tracepoint fires when a
-          # signal is generated, exposing the SENDER (current task pid/comm) and
-          # the TARGET (args->pid/args->comm). If the sender is a suite process
-          # (node/vp/pnpm) it is a real bug; if it is the runner agent
-          # (Runner.Worker/dotnet) the Actions service is cancelling the job and
-          # the fix is serial execution or a different runner. bpftrace output is
-          # appended to the trace file so it survives the cancellation (the
-          # always()-run "Print PTY trace" step dumps it).
-          TRACE_FILE="${{ runner.temp }}/pty-trace.log"
+          # The GitHub-hosted ubuntu-latest job was reproducibly cancelled by the
+          # Actions service ~1-2 min in ("runner received a shutdown signal")
+          # during the create-heavy cases (~23 fixtures, each spinning up its own
+          # local-registry Node server plus a real package-manager install). It is
+          # not OOM and not CPU (memory healthy, load ~3-5 on 4 vCPUs), and a
+          # bpftrace probe on signal:signal_generate proved no suite process ever
+          # sends a SIGINT: the suite only exchanges normal SIGTERM/SIGHUP/SIGKILL
+          # among its own node/vp/vpt/gyp children. The runner loses its
+          # control-plane connection under the concurrent install/registry load.
+          # Run the Linux leg fully serial so only one install/registry pair is
+          # ever live; the roomier mac/Windows runners keep full parallelism.
+          THREADS_ARG=""
           if [ "$(uname)" = "Linux" ]; then
-            sudo apt-get install -y -q bpftrace >/dev/null 2>&1 || echo "[sigtrace] bpftrace install failed"
-            # tee to stdout (live step log) AND the trace file (survives the
-            # teardown via the always()-run "Print PTY trace" step).
-            sudo stdbuf -oL bpftrace -e '
-              tracepoint:signal:signal_generate /args->sig==2 || args->sig==15 || args->sig==1 || args->sig==9/ {
-                printf("[sigtrace] sig=%d SENDER pid=%d comm=%s -> TARGET pid=%d comm=%s\n", args->sig, pid, comm, args->pid, args->comm);
-              }' 2>&1 | stdbuf -oL tee -a "$TRACE_FILE" &
-            BPF=$!
-            sleep 3   # let bpftrace attach before the suite starts
+            THREADS_ARG="--test-threads=1"
           fi
+          # Diagnostics (temporary): trap confirms whether a SIGINT still reaches
+          # this step; Linux-only monitor (macOS lacks free/ps --no-headers)
+          # confirms resource health.
           trap 'echo "[step-signal] SIGTERM $(date +%H:%M:%S)"' TERM
           trap 'echo "[step-signal] SIGINT $(date +%H:%M:%S)"' INT
           trap 'echo "[step-signal] SIGHUP $(date +%H:%M:%S)"' HUP
@@ -1140,9 +1137,8 @@ jobs:
           fi
           VP_SNAP_GLOBAL_VP="$HOME/.vite-plus/bin/vp" \
           VP_SNAP_JS_RUNTIME_DIR="$HOME/.vite-plus/js_runtime" \
-          cargo test -p vite_cli_snapshots -- --nocapture
+          cargo test -p vite_cli_snapshots -- --nocapture $THREADS_ARG
           [ -n "${MON:-}" ] && kill "$MON" 2>/dev/null || true
-          [ -n "${BPF:-}" ] && sudo kill "$BPF" 2>/dev/null || true
         env:
           RUST_BACKTRACE: '1'
           # Diagnostic step tracing (see snap_trace): a step that logs START
