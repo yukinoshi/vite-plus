@@ -338,7 +338,11 @@ impl FlavorRuntime {
             // vpt is the runner's own assertion tool: a case-created shim must
             // never shadow it, so it resolves only from the flavor bin dir.
             "vpt" => self.bin_dir_tool(program),
-            "node" | "git" | "npm" | "pnpm" | "yarn" | "bun" => {
+            "node" | "git" | "npm" | "npx" | "pnpm" | "yarn" | "bun" => {
+                // Resolved from the case PATH, which leads with `$VP_HOME/bin`,
+                // so the vp-managed shims win over any host tool. `npx` is here
+                // for the shim tests that assert the npx shim resolves the
+                // project-pinned packageManager version.
                 which::which_in(program, Some(case_path), cwd)
                     .map_err(|e| format!("`{program}` not found on the case PATH: {e}"))
             }
