@@ -39,16 +39,31 @@ const STEP_TIMEOUT: Duration =
 /// Screen size for the PTY terminal. Large enough to avoid line wrapping.
 const SCREEN_SIZE: ScreenSize = ScreenSize { rows: 500, cols: 500 };
 
-/// Diagnostic step tracing, gated on `VP_SNAP_TRACE=1`. Writes straight to
-/// fd 2 (not `eprintln!`, which the test harness may capture and buffer), so
-/// lines reach the CI step log even when a step wedges and the job is killed
-/// by its timeout. CI prepends per-line timestamps, so a step that logs
-/// `START` without a matching `END` is the one that hung.
+/// Diagnostic step tracing. A step that logs `START` without a matching
+/// `END` is the one that wedged; the phase markers localize within it.
+///
+/// `VP_SNAP_TRACE_FILE` appends to that file (each line flushed) — use this in
+/// CI: a step killed by its timeout has its own log discarded by GitHub, but a
+/// file on disk survives and a later `if: always()` step can print it.
+/// `VP_SNAP_TRACE=1` writes to stderr instead, for local runs.
 fn snap_trace(args: std::fmt::Arguments<'_>) {
-    static ENABLED: std::sync::LazyLock<bool> =
-        std::sync::LazyLock::new(|| std::env::var_os("VP_SNAP_TRACE").is_some_and(|v| v == "1"));
-    if *ENABLED {
-        use std::io::Write as _;
+    use std::io::Write as _;
+    static SINK: std::sync::LazyLock<Option<std::sync::Mutex<std::fs::File>>> =
+        std::sync::LazyLock::new(|| {
+            let path = std::env::var_os("VP_SNAP_TRACE_FILE")?;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok()
+                .map(std::sync::Mutex::new)
+        });
+    if let Some(file) = SINK.as_ref() {
+        if let Ok(mut file) = file.lock() {
+            let _ = writeln!(file, "[pty-trace] {args}");
+            let _ = file.flush();
+        }
+    } else if std::env::var_os("VP_SNAP_TRACE").is_some_and(|v| v == "1") {
         let mut err = std::io::stderr().lock();
         let _ = writeln!(err, "[pty-trace] {args}");
         let _ = err.flush();

@@ -1099,10 +1099,23 @@ jobs:
           cargo test -p vite_cli_snapshots
         env:
           RUST_BACKTRACE: '1'
-          # Diagnostic step tracing to stderr (see snap_trace): a step that
-          # logs START without END is the one that wedged. Investigating the
-          # recurring Namespace-Linux PTY wedge that survives the spawn bound.
-          VP_SNAP_TRACE: '1'
+          # Diagnostic step tracing to a file (see snap_trace): a step that
+          # logs START without END is the one that wedged. Written to a file
+          # (not the step log) because GitHub discards a timed-out step's log;
+          # the next step prints it. Investigating the recurring Namespace-
+          # Linux PTY wedge that survives the spawn bound.
+          VP_SNAP_TRACE_FILE: ${{ runner.temp }}/pty-trace.log
+
+      - name: Print PTY trace
+        # Runs even when the step above is killed by its timeout, so the trace
+        # survives the wedge (that step's own log does not).
+        if: always()
+        run: |
+          if [ -f "${{ runner.temp }}/pty-trace.log" ]; then
+            cat "${{ runner.temp }}/pty-trace.log"
+          else
+            echo "no pty-trace file (VP_SNAP_TRACE_FILE unwritten)"
+          fi
 
   # Runs the PTY snapshot suite (crates/vite_cli_snapshots) on Windows with
   # BOTH vp flavors, without a Rust toolchain on the runner: the test binary
